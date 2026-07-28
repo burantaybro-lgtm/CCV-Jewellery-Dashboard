@@ -105,18 +105,30 @@ function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
       const department = String(row[5] ?? "").trim().toUpperCase();
       if (!stockCode || department !== "JEWELLERY") continue;
       const descriptionParts: string[] = [];
+      const ticketCandidates: number[] = [];
       let j = i + 1;
       for (; j < rows.length; j++) {
         const next = rows[j] ?? [];
         const nextText = next.filter(Boolean).join(" ").toUpperCase();
         if (String(next[3] ?? "").trim() || nextText.includes("NOT FOUND DURING STOCKTAKE") || nextText.includes("CASH CONVERTERS")) break;
         if (next[0]) descriptionParts.push(String(next[0]).trim());
+        // Ticket prices are stored in a separate cell on a description row
+        // beneath the stock code (normally column I in the stocktake report).
+        for (let cellIndex = 1; cellIndex < next.length; cellIndex++) {
+          const cell = next[cellIndex];
+          if (typeof cell === "string" && cell.includes("$")) {
+            const amount = parseCurrency(cell);
+            if (amount > 0) ticketCandidates.push(amount);
+          } else if (cellIndex === 8 && typeof cell === "number" && cell > 0) {
+            ticketCandidates.push(cell);
+          }
+        }
         if (j - i > 5) break;
       }
       let description = descriptionParts.join(" ").replace(/\s+/g, " ").trim();
       if (/\bWATCH(?:ES)?\b/i.test(description)) { i = Math.max(i, j - 1); continue; }
       const recoveredTicket = leadingTicket(description);
-      const ticketPrice = parseCurrency(row[8]) || recoveredTicket?.value || 0;
+      const ticketPrice = parseCurrency(row[8]) || ticketCandidates[0] || recoveredTicket?.value || 0;
       if (recoveredTicket) description = recoveredTicket.description;
       const metal = detectMetal(description);
       const weight = detectWeight(description);

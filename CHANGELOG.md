@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 4.0.0 — 29 July 2026
+
+- Fixed ticket prices stored in column I of the description row beneath each stock code.
+- Verified the importer against the original Palmerston North `.xls` report.
+- Kept the filtered Total Ticket Price card introduced in Version 3.
+
 ## Version 3.0.0 — 29 July 2026
 
 - Fixed ticket prices showing as `$0` when the report stores the ticket at the start of the first description line.

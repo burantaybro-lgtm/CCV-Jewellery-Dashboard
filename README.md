@@ -1,8 +1,8 @@
-# CCV Jewellery Melt Dashboard — Version 3
+# CCV Jewellery Melt Dashboard — Version 4
 
 A Cash Converters themed dashboard for comparing jewellery ticket prices with estimated refinery melt values.
 
-## Version 3 features
+## Version 4 features
 
 - Upload `.xls` or `.xlsx` stocktake reports
 - Select Palmerston North, New Plymouth, or Wanganui before upload
@@ -52,7 +52,7 @@ Melt risk:
 
 ## Data storage
 
-Version 3 stores uploaded stock, price settings, selling fee and thresholds in the browser on the device being used. Uploading a new report replaces only the selected store's list.
+Version 4 stores uploaded stock, price settings, selling fee and thresholds in the browser on the device being used. Uploading a new report replaces only the selected store's list.
 
 ## Private information
 
