@@ -1,8 +1,12 @@
-# CCV Jewellery Melt Dashboard — Version 6
+# CCV Jewellery Melt Dashboard — Version 7
 
 A Cash Converters themed dashboard for comparing jewellery ticket prices with estimated refinery melt values.
 
-## Version 6 features
+## Version 7 features
+
+- Add, rename, deactivate, reactivate and permanently delete franchise stores
+- Active stores control report uploads, store filters and combined totals
+- Deactivated stores retain their stock without appearing in dashboard totals
 
 - Upload `.xls` or `.xlsx` stocktake reports
 - Select Palmerston North, New Plymouth, or Wanganui before upload

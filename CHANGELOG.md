@@ -1,5 +1,13 @@
 # Changelog
 
+## Version 7.0.0 — 29 July 2026
+
+- Added Store Management with add, rename, deactivate, reactivate and delete actions.
+- Active stores now drive report uploads, dashboard filters and combined totals.
+- Deactivated stores retain their stock while being excluded from the dashboard.
+- Permanently deleting a store also removes its locally saved stock after confirmation.
+- Store records and changes are saved in browser storage.
+
 ## Version 6.0.0 — 29 July 2026
 
 - Removed GST from the estimated net sale return calculation.

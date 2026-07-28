@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
-  AlertTriangle, ArrowDownUp, ChevronDown, CircleDollarSign, Clock3,
+  AlertTriangle, ArrowDownUp, ChevronDown, CircleDollarSign,
   FileSpreadsheet, Gem, RefreshCw, Search, Settings2, SlidersHorizontal,
   Store, Upload, X
 } from "lucide-react";
 
-type StoreName = "Palmerston North" | "New Plymouth" | "Wanganui";
+type StoreName = string;
+type StoreRecord = { id: string; name: string; active: boolean };
 type Metal = "9ct" | "10ct" | "14ct" | "18ct" | "22ct" | "Sterling Silver" | "Platinum" | "Unknown";
 type Item = {
   stockCode: string; description: string; ticketPrice: number; originalShelfDate: string;
@@ -19,7 +20,11 @@ type Prices = { gold: number; silver: number; updatedAt: string; source: "daily"
 type Thresholds = { red: number; orange: number; yellow: number };
 type SortKey = "ratio" | "ticket" | "melt" | "difference" | "days" | "stock";
 
-const STORES: StoreName[] = ["Palmerston North", "New Plymouth", "Wanganui"];
+const DEFAULT_STORES: StoreRecord[] = [
+  { id: "palmerston-north", name: "Palmerston North", active: true },
+  { id: "new-plymouth", name: "New Plymouth", active: true },
+  { id: "wanganui", name: "Wanganui", active: true },
+];
 const DEFAULT_SELLING_FEE = 0.15;
 const SAMPLE_ITEMS: Item[] = [
   { stockCode: "DEMO-1001", description: "9CT YG CHAIN TW 12.40GMS", ticketPrice: 649, originalShelfDate: "2025-03-14", currentShelfDate: "2026-05-02", metal: "9ct", weight: 12.4, store: "Palmerston North" },
@@ -149,6 +154,7 @@ function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
 export default function Home() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<Item[]>([]);
+  const [stores, setStores] = useState<StoreRecord[]>(DEFAULT_STORES);
   const [ready, setReady] = useState(false);
   const [storeFilter, setStoreFilter] = useState<"All stores" | StoreName>("All stores");
   const [uploadStore, setUploadStore] = useState<StoreName>("Palmerston North");
@@ -157,6 +163,7 @@ export default function Home() {
   const [priorityFilter, setPriorityFilter] = useState("All priorities");
   const [sortKey, setSortKey] = useState<SortKey>("ratio");
   const [showSettings, setShowSettings] = useState(false);
+  const [showStores, setShowStores] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [notice, setNotice] = useState("");
@@ -164,6 +171,8 @@ export default function Home() {
   const [dailyPrices, setDailyPrices] = useState<Prices>({ gold: 185, silver: 2.25, updatedAt: todayIso(), source: "daily" });
   const [thresholds, setThresholds] = useState<Thresholds>({ red: 1, orange: 0.75, yellow: 0.5 });
   const [sellingFee, setSellingFee] = useState(DEFAULT_SELLING_FEE);
+  const [newStoreName, setNewStoreName] = useState("");
+  const activeStores = useMemo(() => stores.filter(store => store.active), [stores]);
 
   useEffect(() => {
     try {
@@ -171,7 +180,9 @@ export default function Home() {
       const savedPrices = localStorage.getItem("ccv-jewellery-prices");
       const savedThresholds = localStorage.getItem("ccv-jewellery-thresholds");
       const savedSellingFee = localStorage.getItem("ccv-jewellery-selling-fee");
+      const savedStores = localStorage.getItem("ccv-jewellery-stores");
       setItems(savedItems ? (JSON.parse(savedItems) as Item[]).map(repairSavedTicket) : SAMPLE_ITEMS);
+      if (savedStores) setStores(JSON.parse(savedStores));
       if (savedPrices) { const p = JSON.parse(savedPrices); setPrices(p); setDailyPrices({ ...p, source: "daily" }); }
       if (savedThresholds) setThresholds(JSON.parse(savedThresholds));
       if (savedSellingFee !== null) setSellingFee(Number(savedSellingFee));
@@ -192,8 +203,12 @@ export default function Home() {
   useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-prices", JSON.stringify(prices)); }, [prices, ready]);
   useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-thresholds", JSON.stringify(thresholds)); }, [thresholds, ready]);
   useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-selling-fee", String(sellingFee)); }, [sellingFee, ready]);
+  useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-stores", JSON.stringify(stores)); }, [stores, ready]);
 
-  const storeItems = useMemo(() => items.filter(i => storeFilter === "All stores" || i.store === storeFilter), [items, storeFilter]);
+  const storeItems = useMemo(() => {
+    const activeNames = new Set(activeStores.map(store => store.name));
+    return items.filter(i => storeFilter === "All stores" ? activeNames.has(i.store) : i.store === storeFilter);
+  }, [items, storeFilter, activeStores]);
   const reviewItems = storeItems.filter(i => i.reviewReason);
   const validItems = storeItems.filter(i => !i.reviewReason);
   const totals = useMemo(() => ({
@@ -245,7 +260,56 @@ export default function Home() {
   }
 
   function resetDemo() {
-    setItems(SAMPLE_ITEMS); setStoreFilter("All stores"); setNotice("Demo data restored.");
+    setItems(SAMPLE_ITEMS); setStores(DEFAULT_STORES); setStoreFilter("All stores"); setUploadStore("Palmerston North"); setNotice("Demo data restored.");
+  }
+
+  function addStore() {
+    const name = newStoreName.trim().replace(/\s+/g, " ");
+    if (!name) return;
+    if (stores.some(store => store.name.toLowerCase() === name.toLowerCase())) {
+      setNotice("A store with that name already exists.");
+      return;
+    }
+    setStores(current => [...current, { id: `${Date.now()}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, name, active: true }]);
+    setUploadStore(name); setNewStoreName(""); setNotice(`${name} was added.`);
+  }
+
+  function renameStore(id: string, nextName: string) {
+    const store = stores.find(candidate => candidate.id === id);
+    const name = nextName.trim().replace(/\s+/g, " ");
+    if (!store || !name || name === store.name) return;
+    if (stores.some(candidate => candidate.id !== id && candidate.name.toLowerCase() === name.toLowerCase())) {
+      setNotice("A store with that name already exists.");
+      return;
+    }
+    setStores(current => current.map(candidate => candidate.id === id ? { ...candidate, name } : candidate));
+    setItems(current => current.map(item => item.store === store.name ? { ...item, store: name } : item));
+    if (storeFilter === store.name) setStoreFilter(name);
+    if (uploadStore === store.name) setUploadStore(name);
+    setNotice(`${store.name} was renamed to ${name}.`);
+  }
+
+  function toggleStore(id: string) {
+    const store = stores.find(candidate => candidate.id === id);
+    if (!store) return;
+    setStores(current => current.map(candidate => candidate.id === id ? { ...candidate, active: !candidate.active } : candidate));
+    if (store.active && storeFilter === store.name) setStoreFilter("All stores");
+    if (store.active && uploadStore === store.name) {
+      const replacement = activeStores.find(candidate => candidate.id !== id);
+      if (replacement) setUploadStore(replacement.name);
+    }
+    setNotice(`${store.name} was ${store.active ? "deactivated" : "reactivated"}.`);
+  }
+
+  function deleteStore(id: string) {
+    const store = stores.find(candidate => candidate.id === id);
+    if (!store || !window.confirm(`Permanently delete ${store.name} and all of its saved stock? This cannot be undone.`)) return;
+    setStores(current => current.filter(candidate => candidate.id !== id));
+    setItems(current => current.filter(item => item.store !== store.name));
+    if (storeFilter === store.name) setStoreFilter("All stores");
+    const replacement = activeStores.find(candidate => candidate.id !== id);
+    if (uploadStore === store.name && replacement) setUploadStore(replacement.name);
+    setNotice(`${store.name} and its stock were permanently deleted.`);
   }
 
   return (
@@ -253,6 +317,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><span className="brandMark">CCV</span><div><b>Jewellery Melt</b><small>Decision Dashboard</small></div></div>
         <div className="headerActions">
+          <button className="iconButton" onClick={() => setShowStores(true)} aria-label="Manage stores"><Store size={20}/></button>
           <button className="iconButton" onClick={() => setShowSettings(true)} aria-label="Open settings"><Settings2 size={20}/></button>
           <button className="uploadButton" onClick={() => setShowUpload(true)}><Upload size={18}/> Upload report</button>
         </div>
@@ -262,7 +327,7 @@ export default function Home() {
         {notice && <div className="notice">{notice}<button onClick={() => setNotice("")}><X size={16}/></button></div>}
         <div className="pageHead">
           <div><p className="eyebrow">JEWELLERY PERFORMANCE</p><h1>What is worth more melted?</h1><p className="subhead">Compare refinery values with estimated net sale returns after selling fees.</p></div>
-          <label className="storeSelect"><Store size={18}/><select value={storeFilter} onChange={e => setStoreFilter(e.target.value as typeof storeFilter)}><option>All stores</option>{STORES.map(s => <option key={s}>{s}</option>)}</select><ChevronDown size={16}/></label>
+          <label className="storeSelect"><Store size={18}/><select value={storeFilter} onChange={e => setStoreFilter(e.target.value as typeof storeFilter)}><option>All stores</option>{activeStores.map(s => <option key={s.id}>{s.name}</option>)}</select><ChevronDown size={16}/></label>
         </div>
 
         <div className="priceStrip">
@@ -307,16 +372,34 @@ export default function Home() {
               </tr>;
             })}</tbody></table>{!rows.length && <div className="empty">No items match the selected filters.</div>}</div>
         </section>
-        <p className="dataNote">Version 6 stores uploaded stock and settings in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
+        <p className="dataNote">Version 7 stores uploaded stock, stores and settings in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
       </section>
 
       {showUpload && <div className="modalBackdrop"><section className="modal">
         <button className="modalClose" onClick={() => setShowUpload(false)}><X/></button><span className="modalIcon"><FileSpreadsheet/></span>
         <p className="eyebrow">STORE STOCK UPDATE</p><h2>Upload jewellery report</h2><p>Select the store, then upload its Excel report. This replaces that store’s current list; new codes are added and missing codes are removed.</p>
-        <label className="field"><span>Store</span><select value={uploadStore} onChange={e => setUploadStore(e.target.value as StoreName)}>{STORES.map(s => <option key={s}>{s}</option>)}</select></label>
+        <label className="field"><span>Store</span><select value={uploadStore} onChange={e => setUploadStore(e.target.value as StoreName)}>{activeStores.map(s => <option key={s.id}>{s.name}</option>)}</select></label>
         <button className="dropzone" onClick={() => fileRef.current?.click()}><Upload size={26}/><b>Choose Excel report</b><span>.xls or .xlsx</span></button>
         <input ref={fileRef} hidden type="file" accept=".xls,.xlsx" onChange={e => handleUpload(e.target.files?.[0])}/>
-        <div className="importRules"><b>Version 6 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
+        <div className="importRules"><b>Version 7 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
+      </section></div>}
+
+      {showStores && <div className="modalBackdrop"><section className="modal storesModal">
+        <button className="modalClose" onClick={() => setShowStores(false)}><X/></button><span className="modalIcon"><Store/></span>
+        <p className="eyebrow">STORE MANAGEMENT</p><h2>Manage stores</h2>
+        <p>Active stores are included in combined totals and available for report uploads. Deactivate a store to keep its stock without including it.</p>
+        <div className="addStore">
+          <label className="field"><span>New store name</span><input value={newStoreName} onChange={e => setNewStoreName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addStore(); }} placeholder="Enter franchise store name"/></label>
+          <button className="primary" onClick={addStore}>Add store</button>
+        </div>
+        <div className="storeList">{stores.map(store => <article key={store.id} className={!store.active ? "inactive" : ""}>
+          <div className="storeIdentity"><span className={`statusDot ${store.active ? "active" : ""}`}/><div><b>{store.name}</b><small>{store.active ? "Active · included in combined totals" : "Inactive · stock retained but excluded"}</small></div></div>
+          <div className="storeActions">
+            <button className="secondary" onClick={() => { const name = window.prompt("Rename store", store.name); if (name !== null) renameStore(store.id, name); }}>Rename</button>
+            <button className="secondary" onClick={() => toggleStore(store.id)}>{store.active ? "Deactivate" : "Reactivate"}</button>
+            <button className="deleteButton" onClick={() => deleteStore(store.id)}>Delete</button>
+          </div>
+        </article>)}</div>
       </section></div>}
 
       {showSettings && <div className="modalBackdrop"><section className="modal settingsModal">
