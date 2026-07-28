@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 6.0.0 — 29 July 2026
+
+- Removed GST from the estimated net sale return calculation.
+- Net sale return now deducts only the editable selling fee.
+- Updated Melt Risk percentages, differences, opportunity counts and help text to use the revised net sale return.
+
 ## Version 4.0.0 — 29 July 2026
 
 - Fixed ticket prices stored in column I of the description row beneath each stock code.
@@ -34,7 +40,7 @@
 - Added editable priority thresholds.
 - Added stock search, filters, sorting and Needs Review workflow.
 - Added responsive desktop and mobile layouts.
-# Version 5
+## Version 5.0.0 — 29 July 2026
 
 - Added clear highest-to-lowest sorting for days on sale, ticket price, melt value and difference.
 - Kept melt risk percentage and stock-code sorting available.

@@ -20,7 +20,6 @@ type Thresholds = { red: number; orange: number; yellow: number };
 type SortKey = "ratio" | "ticket" | "melt" | "difference" | "days" | "stock";
 
 const STORES: StoreName[] = ["Palmerston North", "New Plymouth", "Wanganui"];
-const GST_RATE = 0.15;
 const DEFAULT_SELLING_FEE = 0.15;
 const SAMPLE_ITEMS: Item[] = [
   { stockCode: "DEMO-1001", description: "9CT YG CHAIN TW 12.40GMS", ticketPrice: 649, originalShelfDate: "2025-03-14", currentShelfDate: "2026-05-02", metal: "9ct", weight: 12.4, store: "Palmerston North" },
@@ -84,7 +83,7 @@ const meltValue = (item: Item, prices: Prices) => {
   return k ? (prices.gold * 0.97 / 24) * k * item.weight * 1.15 : 0;
 };
 const netSaleReturn = (ticketPrice: number, sellingFee: number) =>
-  Math.max(0, (ticketPrice / (1 + GST_RATE)) - (ticketPrice * sellingFee));
+  Math.max(0, ticketPrice * (1 - sellingFee));
 const priority = (ratio: number, t: Thresholds) => ratio > t.red ? "red" : ratio >= t.orange ? "orange" : ratio >= t.yellow ? "yellow" : "green";
 
 function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
@@ -262,7 +261,7 @@ export default function Home() {
       <section className="workspace">
         {notice && <div className="notice">{notice}<button onClick={() => setNotice("")}><X size={16}/></button></div>}
         <div className="pageHead">
-          <div><p className="eyebrow">JEWELLERY PERFORMANCE</p><h1>What is worth more melted?</h1><p className="subhead">Compare refinery values with estimated net sale returns after GST and selling costs.</p></div>
+          <div><p className="eyebrow">JEWELLERY PERFORMANCE</p><h1>What is worth more melted?</h1><p className="subhead">Compare refinery values with estimated net sale returns after selling fees.</p></div>
           <label className="storeSelect"><Store size={18}/><select value={storeFilter} onChange={e => setStoreFilter(e.target.value as typeof storeFilter)}><option>All stores</option>{STORES.map(s => <option key={s}>{s}</option>)}</select><ChevronDown size={16}/></label>
         </div>
 
@@ -303,12 +302,12 @@ export default function Home() {
                 <td><b>{item.stockCode}</b><small>{item.description}</small></td><td>{item.store}</td>
                 <td><b>{item.metal}</b><small>{item.weight?.toFixed(2)} g</small></td>
                 <td><b>{daysOnSale(item.originalShelfDate)} days</b><small>Repriced {item.currentShelfDate || "—"}</small></td>
-                <td className="numeric">{money(item.ticketPrice)}</td><td className="numeric"><b>{money(net)}</b><small>after GST + fee</small></td><td className="numeric"><b>{money(melt)}</b></td>
+                <td className="numeric">{money(item.ticketPrice)}</td><td className="numeric"><b>{money(net)}</b><small>after selling fee</small></td><td className="numeric"><b>{money(melt)}</b></td>
                 <td className={`numeric diff ${difference > 0 ? "negative" : "positive"}`}><b>{difference > 0 ? "+" : "−"}{money(Math.abs(difference))}</b><small>{difference > 0 ? "melt advantage" : "net sale advantage"}</small></td>
               </tr>;
             })}</tbody></table>{!rows.length && <div className="empty">No items match the selected filters.</div>}</div>
         </section>
-        <p className="dataNote">Version 2 stores uploaded stock and settings in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
+        <p className="dataNote">Version 6 stores uploaded stock and settings in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
       </section>
 
       {showUpload && <div className="modalBackdrop"><section className="modal">
@@ -317,7 +316,7 @@ export default function Home() {
         <label className="field"><span>Store</span><select value={uploadStore} onChange={e => setUploadStore(e.target.value as StoreName)}>{STORES.map(s => <option key={s}>{s}</option>)}</select></label>
         <button className="dropzone" onClick={() => fileRef.current?.click()}><Upload size={26}/><b>Choose Excel report</b><span>.xls or .xlsx</span></button>
         <input ref={fileRef} hidden type="file" accept=".xls,.xlsx" onChange={e => handleUpload(e.target.files?.[0])}/>
-        <div className="importRules"><b>Version 2 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
+        <div className="importRules"><b>Version 6 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
       </section></div>}
 
       {showSettings && <div className="modalBackdrop"><section className="modal settingsModal">
@@ -328,16 +327,13 @@ export default function Home() {
           <label className="field"><span>Silver spot price (NZD/g)</span><input type="number" step="0.01" value={prices.silver} onChange={e => setPrices(p => ({...p, silver: Number(e.target.value), source: "manual", updatedAt: todayIso()}))}/></label>
         </div>
         <h3>Sale deductions</h3>
-        <div className="twoCols">
-          <label className="field"><span>GST (fixed)</span><input type="number" value={GST_RATE * 100} disabled/><i>%</i></label>
-          <label className="field"><span>Selling fee (editable)</span><input type="number" min="0" max="100" step="0.1" value={sellingFee * 100} onChange={e => setSellingFee(Math.max(0, Number(e.target.value)) / 100)}/><i>%</i></label>
-        </div>
+        <label className="field"><span>Selling fee (editable)</span><input type="number" min="0" max="100" step="0.1" value={sellingFee * 100} onChange={e => setSellingFee(Math.min(1, Math.max(0, Number(e.target.value) / 100)))}/><i>%</i></label>
         <h3>Priority thresholds</h3><div className="threeCols">
           <label className="field"><span>Red above</span><input type="number" value={thresholds.red * 100} onChange={e => setThresholds(t => ({...t, red: Number(e.target.value)/100}))}/><i>%</i></label>
           <label className="field"><span>Orange from</span><input type="number" value={thresholds.orange * 100} onChange={e => setThresholds(t => ({...t, orange: Number(e.target.value)/100}))}/><i>%</i></label>
           <label className="field"><span>Yellow from</span><input type="number" value={thresholds.yellow * 100} onChange={e => setThresholds(t => ({...t, yellow: Number(e.target.value)/100}))}/><i>%</i></label>
         </div>
-        <div className="formula"><b>Net sale return:</b> (ticket ÷ 1.15) − (ticket × selling fee)<br/><b>Melt risk:</b> melt value ÷ net sale return × 100<br/><b>Gold:</b> ((97% × spot ÷ 24) × carat × weight) × 1.15<br/><b>Silver:</b> spot × 92.5% × 97% × weight × 1.15</div>
+        <div className="formula"><b>Net sale return:</b> ticket × (1 − selling fee)<br/><b>Melt risk:</b> melt value ÷ net sale return × 100<br/><b>Gold:</b> ((97% × spot ÷ 24) × carat × weight) × 1.15<br/><b>Silver:</b> spot × 92.5% × 97% × weight × 1.15</div>
         <div className="modalActions"><button className="secondary" onClick={() => { resetDemo(); setSellingFee(DEFAULT_SELLING_FEE); }}>Reset demo</button><button className="secondary" onClick={() => setPrices(dailyPrices)}>Use daily prices</button><button className="primary" onClick={() => setShowSettings(false)}>Apply settings</button></div>
       </section></div>}
 

@@ -1,8 +1,8 @@
-# CCV Jewellery Melt Dashboard — Version 4
+# CCV Jewellery Melt Dashboard — Version 6
 
 A Cash Converters themed dashboard for comparing jewellery ticket prices with estimated refinery melt values.
 
-## Version 4 features
+## Version 6 features
 
 - Upload `.xls` or `.xlsx` stocktake reports
 - Select Palmerston North, New Plymouth, or Wanganui before upload
@@ -16,8 +16,7 @@ A Cash Converters themed dashboard for comparing jewellery ticket prices with es
 - Calculate gold and sterling silver melt values
 - Automatically refresh NZD spot prices once daily, with saved-price fallback
 - Manual gold and silver scenario pricing
-- Estimated net sale return after GST and selling costs
-- Fixed New Zealand GST at 15%
+- Estimated net sale return after selling costs
 - Editable selling-fee percentage, defaulting to 15%
 - Melt-risk colours based on melt value versus net sale return
 - Adjustable red, orange, yellow and green thresholds
@@ -36,7 +35,7 @@ Sterling silver:
 
 Net sale return:
 
-`(ticket price ÷ 1.15) − (ticket price × editable selling fee)`
+`ticket price × (1 − editable selling fee)`
 
 Melt risk:
 
@@ -52,7 +51,7 @@ Melt risk:
 
 ## Data storage
 
-Version 4 stores uploaded stock, price settings, selling fee and thresholds in the browser on the device being used. Uploading a new report replaces only the selected store's list.
+Version 6 stores uploaded stock, price settings, selling fee and thresholds in the browser on the device being used. Uploading a new report replaces only the selected store's list.
 
 ## Private information
 
