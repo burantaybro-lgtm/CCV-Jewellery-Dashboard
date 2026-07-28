@@ -1,0 +1,299 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
+import {
+  AlertTriangle, ArrowDownUp, ChevronDown, CircleDollarSign, Clock3,
+  FileSpreadsheet, Gem, RefreshCw, Search, Settings2, SlidersHorizontal,
+  Store, Upload, X
+} from "lucide-react";
+
+type StoreName = "Palmerston North" | "New Plymouth" | "Wanganui";
+type Metal = "9ct" | "10ct" | "14ct" | "18ct" | "22ct" | "Sterling Silver" | "Platinum" | "Unknown";
+type Item = {
+  stockCode: string; description: string; ticketPrice: number; originalShelfDate: string;
+  currentShelfDate: string; metal: Metal; weight: number | null; store: StoreName;
+  reviewReason?: string;
+};
+type Prices = { gold: number; silver: number; updatedAt: string; source: "daily" | "manual" };
+type Thresholds = { red: number; orange: number; yellow: number };
+type SortKey = "ratio" | "ticket" | "melt" | "days" | "stock";
+
+const STORES: StoreName[] = ["Palmerston North", "New Plymouth", "Wanganui"];
+const SAMPLE_ITEMS: Item[] = [
+  { stockCode: "DEMO-1001", description: "9CT YG CHAIN TW 12.40GMS", ticketPrice: 649, originalShelfDate: "2025-03-14", currentShelfDate: "2026-05-02", metal: "9ct", weight: 12.4, store: "Palmerston North" },
+  { stockCode: "DEMO-1002", description: "18CT WG DIAMOND RING TW 4.20GMS", ticketPrice: 899, originalShelfDate: "2025-10-08", currentShelfDate: "2026-04-19", metal: "18ct", weight: 4.2, store: "Palmerston North" },
+  { stockCode: "DEMO-1003", description: "STERLING SILVER BRACELET TW 38.60GMS", ticketPrice: 139, originalShelfDate: "2026-01-21", currentShelfDate: "2026-01-21", metal: "Sterling Silver", weight: 38.6, store: "New Plymouth" },
+  { stockCode: "DEMO-1004", description: "14CT YG BANGLE TW 10.80GMS", ticketPrice: 1199, originalShelfDate: "2024-11-03", currentShelfDate: "2026-02-11", metal: "14ct", weight: 10.8, store: "Wanganui" },
+  { stockCode: "DEMO-1005", description: "10CT RG RING TW 2.45GMS", ticketPrice: 275, originalShelfDate: "2026-04-07", currentShelfDate: "2026-04-07", metal: "10ct", weight: 2.45, store: "New Plymouth" },
+  { stockCode: "DEMO-1006", description: "22CT YG PENDANT TW 5.10GMS", ticketPrice: 875, originalShelfDate: "2025-07-17", currentShelfDate: "2026-03-04", metal: "22ct", weight: 5.1, store: "Wanganui" },
+  { stockCode: "DEMO-1007", description: "PT RING TW 5.30GMS", ticketPrice: 1100, originalShelfDate: "2025-12-12", currentShelfDate: "2025-12-12", metal: "Platinum", weight: 5.3, store: "Palmerston North", reviewReason: "Platinum melt calculation not supported" },
+];
+
+const money = (n: number) => new Intl.NumberFormat("en-NZ", { style: "currency", currency: "NZD", maximumFractionDigits: 0 }).format(n || 0);
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const daysOnSale = (iso: string) => iso ? Math.max(0, Math.floor((new Date(todayIso()).getTime() - new Date(iso).getTime()) / 86400000)) : 0;
+const parseDate = (value: unknown): string => {
+  if (!value) return "";
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  if (typeof value === "number") {
+    const d = XLSX.SSF.parse_date_code(value);
+    return d ? `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}` : "";
+  }
+  const s = String(value).trim();
+  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+  if (m) {
+    const y = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]);
+    return `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+};
+const parseCurrency = (v: unknown) => Number(String(v ?? "0").replace(/[^0-9.-]/g, "")) || 0;
+const detectMetal = (text: string): Metal => {
+  const t = text.toUpperCase();
+  const k = t.match(/\b(9|10|14|18|22)\s*(?:CT|KT|K)\b/);
+  if (k) return `${k[1]}ct` as Metal;
+  if (/\b(SS|STERLING|925)\b/.test(t)) return "Sterling Silver";
+  if (/\b(PT|PLATINUM)\b/.test(t)) return "Platinum";
+  return "Unknown";
+};
+const detectWeight = (text: string) => {
+  const m = text.toUpperCase().match(/(\d+(?:\.\d+)?)\s*GMS?\b/);
+  return m ? Number(m[1]) : null;
+};
+const meltValue = (item: Item, prices: Prices) => {
+  if (!item.weight) return 0;
+  if (item.metal === "Sterling Silver") return prices.silver * 0.925 * 0.97 * item.weight * 1.15;
+  const k = Number(item.metal.replace("ct", ""));
+  return k ? (prices.gold * 0.97 / 24) * k * item.weight * 1.15 : 0;
+};
+const priority = (ratio: number, t: Thresholds) => ratio > t.red ? "red" : ratio >= t.orange ? "orange" : ratio >= t.yellow ? "yellow" : "green";
+
+function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
+  const wb = XLSX.read(buffer, { type: "array", cellDates: true });
+  const out: Item[] = [];
+  for (const sheetName of wb.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], { header: 1, defval: null, raw: true });
+    let active = false;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] ?? [];
+      const joined = row.filter(Boolean).join(" ").toUpperCase().replace(/\s+/g, " ");
+      if (joined.includes("NOT FOUND DURING STOCKTAKE")) {
+        active = joined.includes("ON SALE ACCORDING TO SYSTEM") && !joined.includes("ON SALE (ON HOLD");
+        continue;
+      }
+      if (!active) continue;
+      const stockCode = String(row[3] ?? "").trim();
+      const department = String(row[5] ?? "").trim().toUpperCase();
+      if (!stockCode || department !== "JEWELLERY") continue;
+      const descriptionParts: string[] = [];
+      let j = i + 1;
+      for (; j < rows.length; j++) {
+        const next = rows[j] ?? [];
+        const nextText = next.filter(Boolean).join(" ").toUpperCase();
+        if (String(next[3] ?? "").trim() || nextText.includes("NOT FOUND DURING STOCKTAKE") || nextText.includes("CASH CONVERTERS")) break;
+        if (next[0]) descriptionParts.push(String(next[0]).trim());
+        if (j - i > 5) break;
+      }
+      const description = descriptionParts.join(" ").replace(/\s+/g, " ").trim();
+      if (/\bWATCH(?:ES)?\b/i.test(description)) { i = Math.max(i, j - 1); continue; }
+      const metal = detectMetal(description);
+      const weight = detectWeight(description);
+      const reasons: string[] = [];
+      if (metal === "Platinum") reasons.push("Platinum melt calculation not supported");
+      if (metal === "Unknown") reasons.push("Metal type not recognised");
+      if (!weight) reasons.push("Weight in GMS not found");
+      out.push({
+        stockCode, description: description || "Description not found", ticketPrice: parseCurrency(row[8]),
+        originalShelfDate: parseDate(row[9]), currentShelfDate: parseDate(row[12]), metal, weight, store,
+        reviewReason: reasons.join("; ") || undefined
+      });
+      i = Math.max(i, j - 1);
+    }
+  }
+  return [...new Map(out.map(x => [x.stockCode, x])).values()];
+}
+
+export default function Home() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [items, setItems] = useState<Item[]>([]);
+  const [ready, setReady] = useState(false);
+  const [storeFilter, setStoreFilter] = useState<"All stores" | StoreName>("All stores");
+  const [uploadStore, setUploadStore] = useState<StoreName>("Palmerston North");
+  const [query, setQuery] = useState("");
+  const [metalFilter, setMetalFilter] = useState<"All metals" | Metal>("All metals");
+  const [priorityFilter, setPriorityFilter] = useState("All priorities");
+  const [sortKey, setSortKey] = useState<SortKey>("ratio");
+  const [showSettings, setShowSettings] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [prices, setPrices] = useState<Prices>({ gold: 185, silver: 2.25, updatedAt: todayIso(), source: "daily" });
+  const [dailyPrices, setDailyPrices] = useState<Prices>({ gold: 185, silver: 2.25, updatedAt: todayIso(), source: "daily" });
+  const [thresholds, setThresholds] = useState<Thresholds>({ red: 1, orange: 0.75, yellow: 0.5 });
+
+  useEffect(() => {
+    try {
+      const savedItems = localStorage.getItem("ccv-jewellery-items");
+      const savedPrices = localStorage.getItem("ccv-jewellery-prices");
+      const savedThresholds = localStorage.getItem("ccv-jewellery-thresholds");
+      setItems(savedItems ? JSON.parse(savedItems) : SAMPLE_ITEMS);
+      if (savedPrices) { const p = JSON.parse(savedPrices); setPrices(p); setDailyPrices({ ...p, source: "daily" }); }
+      if (savedThresholds) setThresholds(JSON.parse(savedThresholds));
+    } finally { setReady(true); }
+  }, []);
+  useEffect(() => {
+    if (!ready || prices.source === "manual") return;
+    const cachedToday = prices.updatedAt === todayIso();
+    if (cachedToday && localStorage.getItem("ccv-daily-price-checked") === todayIso()) return;
+    fetch("/api/metal-prices").then(r => r.ok ? r.json() : Promise.reject()).then((p: Prices) => {
+      setDailyPrices(p); setPrices(p); localStorage.setItem("ccv-daily-price-checked", todayIso());
+    }).catch(() => {
+      setNotice("Daily metal prices could not refresh. The last saved prices are still active.");
+      window.setTimeout(() => setNotice(""), 6000);
+    });
+  }, [ready, prices.source, prices.updatedAt]);
+  useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-items", JSON.stringify(items)); }, [items, ready]);
+  useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-prices", JSON.stringify(prices)); }, [prices, ready]);
+  useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-thresholds", JSON.stringify(thresholds)); }, [thresholds, ready]);
+
+  const storeItems = useMemo(() => items.filter(i => storeFilter === "All stores" || i.store === storeFilter), [items, storeFilter]);
+  const reviewItems = storeItems.filter(i => i.reviewReason);
+  const validItems = storeItems.filter(i => !i.reviewReason);
+  const totals = useMemo(() => ({
+    count: storeItems.length,
+    ticket: storeItems.reduce((s, i) => s + i.ticketPrice, 0),
+    melt: validItems.reduce((s, i) => s + meltValue(i, prices), 0),
+    opportunities: validItems.filter(i => meltValue(i, prices) > i.ticketPrice).length
+  }), [storeItems, validItems, prices]);
+  const metals = useMemo(() => (["9ct", "10ct", "14ct", "18ct", "22ct", "Sterling Silver"] as Metal[]).map(m => ({
+    label: m, count: validItems.filter(i => i.metal === m).length,
+    weight: validItems.filter(i => i.metal === m).reduce((s, i) => s + (i.weight || 0), 0)
+  })), [validItems]);
+  const rows = useMemo(() => validItems.filter(i => {
+    const m = meltValue(i, prices); const r = i.ticketPrice ? m / i.ticketPrice : 0;
+    return (!query || `${i.stockCode} ${i.description}`.toLowerCase().includes(query.toLowerCase()))
+      && (metalFilter === "All metals" || i.metal === metalFilter)
+      && (priorityFilter === "All priorities" || priority(r, thresholds) === priorityFilter);
+  }).sort((a, b) => {
+    const am = meltValue(a, prices), bm = meltValue(b, prices);
+    if (sortKey === "ticket") return b.ticketPrice - a.ticketPrice;
+    if (sortKey === "melt") return bm - am;
+    if (sortKey === "days") return daysOnSale(b.originalShelfDate) - daysOnSale(a.originalShelfDate);
+    if (sortKey === "stock") return a.stockCode.localeCompare(b.stockCode);
+    return (bm / (b.ticketPrice || 1)) - (am / (a.ticketPrice || 1));
+  }), [validItems, query, metalFilter, priorityFilter, sortKey, prices, thresholds]);
+
+  async function handleUpload(file?: File) {
+    if (!file) return;
+    try {
+      const imported = parseReport(await file.arrayBuffer(), uploadStore);
+      if (!imported.length) throw new Error("No jewellery was found under the required ON SALE section.");
+      setItems(prev => [...prev.filter(i => i.store !== uploadStore && !i.stockCode.startsWith("DEMO-")), ...imported]);
+      setStoreFilter(uploadStore);
+      setShowUpload(false);
+      setNotice(`${imported.length} jewellery items loaded for ${uploadStore}. Existing store stock was replaced.`);
+      window.setTimeout(() => setNotice(""), 7000);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "The report could not be read."); }
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function resetDemo() {
+    setItems(SAMPLE_ITEMS); setStoreFilter("All stores"); setNotice("Demo data restored.");
+  }
+
+  return (
+    <main>
+      <header className="topbar">
+        <div className="brand"><span className="brandMark">CCV</span><div><b>Jewellery Melt</b><small>Decision Dashboard</small></div></div>
+        <div className="headerActions">
+          <button className="iconButton" onClick={() => setShowSettings(true)} aria-label="Open settings"><Settings2 size={20}/></button>
+          <button className="uploadButton" onClick={() => setShowUpload(true)}><Upload size={18}/> Upload report</button>
+        </div>
+      </header>
+
+      <section className="workspace">
+        {notice && <div className="notice">{notice}<button onClick={() => setNotice("")}><X size={16}/></button></div>}
+        <div className="pageHead">
+          <div><p className="eyebrow">JEWELLERY PERFORMANCE</p><h1>What is worth more melted?</h1><p className="subhead">Compare ticket prices with estimated refinery values across all three stores.</p></div>
+          <label className="storeSelect"><Store size={18}/><select value={storeFilter} onChange={e => setStoreFilter(e.target.value as typeof storeFilter)}><option>All stores</option>{STORES.map(s => <option key={s}>{s}</option>)}</select><ChevronDown size={16}/></label>
+        </div>
+
+        <div className="priceStrip">
+          <div className="priceStatus"><span className="liveDot"/><div><small>{prices.source === "manual" ? "SCENARIO PRICES ACTIVE" : "DAILY METAL PRICES"}</small><b>Gold {money(prices.gold)} <em>/g</em> · Silver ${prices.silver.toFixed(2)} <em>/g</em></b></div></div>
+          <div className="priceMeta">Updated {prices.updatedAt} <button onClick={() => setShowSettings(true)}><SlidersHorizontal size={15}/> Adjust scenario</button></div>
+        </div>
+
+        <section className="metrics">
+          <article><span className="metricIcon burgundy"><Gem size={21}/></span><div><small>ITEMS ON SALE</small><strong>{totals.count}</strong><p>{storeFilter}</p></div></article>
+          <article><span className="metricIcon gold"><CircleDollarSign size={21}/></span><div><small>TOTAL TICKET VALUE</small><strong>{money(totals.ticket)}</strong><p>Across selected stock</p></div></article>
+          <article><span className="metricIcon dark"><RefreshCw size={21}/></span><div><small>EST. MELT VALUE</small><strong>{money(totals.melt)}</strong><p>{totals.ticket ? Math.round(totals.melt / totals.ticket * 100) : 0}% of ticket value</p></div></article>
+          <article className="dangerCard"><span className="metricIcon red"><AlertTriangle size={21}/></span><div><small>MELT OPPORTUNITIES</small><strong>{totals.opportunities}</strong><p>Melt exceeds ticket</p></div></article>
+        </section>
+
+        <section className="caratGrid">
+          {metals.map((m, idx) => <article key={m.label}>
+            <div className={`caratToken c${idx}`}>{m.label === "Sterling Silver" ? "925" : m.label.replace("ct","")}</div>
+            <div><b>{m.label}</b><span>{m.count} items</span></div><strong>{m.weight.toFixed(1)}<small> g</small></strong>
+          </article>)}
+        </section>
+
+        <section className="tableCard">
+          <div className="tableTitle"><div><h2>Jewellery stock</h2><span>{rows.length} items shown</span></div>
+            <button className="reviewButton" onClick={() => setShowReview(true)}><AlertTriangle size={17}/>{reviewItems.length} Needs review</button>
+          </div>
+          <div className="filters">
+            <label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search stock code or description…"/></label>
+            <select value={metalFilter} onChange={e => setMetalFilter(e.target.value as typeof metalFilter)}><option>All metals</option>{metals.map(m => <option key={m.label}>{m.label}</option>)}</select>
+            <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}><option>All priorities</option><option value="red">Red — melt exceeds ticket</option><option value="orange">Orange — within 25%</option><option value="yellow">Yellow — within 50%</option><option value="green">Green — below 50%</option></select>
+            <label className="sort"><ArrowDownUp size={16}/><select value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}><option value="ratio">Melt %</option><option value="melt">Melt value</option><option value="ticket">Ticket price</option><option value="days">Days on sale</option><option value="stock">Stock code</option></select></label>
+          </div>
+          <div className="tableWrap"><table><thead><tr><th>Priority</th><th>Stock item</th><th>Store</th><th>Metal / weight</th><th>On sale</th><th>Ticket</th><th>Melt value</th><th>Difference</th></tr></thead>
+            <tbody>{rows.map(item => {
+              const melt = meltValue(item, prices), difference = melt - item.ticketPrice, ratio = item.ticketPrice ? melt / item.ticketPrice : 0, level = priority(ratio, thresholds);
+              return <tr key={`${item.store}-${item.stockCode}`}>
+                <td><span className={`priority ${level}`}>{Math.round(ratio * 100)}%</span></td>
+                <td><b>{item.stockCode}</b><small>{item.description}</small></td><td>{item.store}</td>
+                <td><b>{item.metal}</b><small>{item.weight?.toFixed(2)} g</small></td>
+                <td><b>{daysOnSale(item.originalShelfDate)} days</b><small>Repriced {item.currentShelfDate || "—"}</small></td>
+                <td className="numeric">{money(item.ticketPrice)}</td><td className="numeric"><b>{money(melt)}</b></td>
+                <td className={`numeric diff ${difference > 0 ? "negative" : "positive"}`}><b>{difference > 0 ? "+" : "−"}{money(Math.abs(difference))}</b><small>{difference > 0 ? "melt advantage" : "ticket advantage"}</small></td>
+              </tr>;
+            })}</tbody></table>{!rows.length && <div className="empty">No items match the selected filters.</div>}</div>
+        </section>
+        <p className="dataNote">Version 1 stores uploaded stock in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
+      </section>
+
+      {showUpload && <div className="modalBackdrop"><section className="modal">
+        <button className="modalClose" onClick={() => setShowUpload(false)}><X/></button><span className="modalIcon"><FileSpreadsheet/></span>
+        <p className="eyebrow">STORE STOCK UPDATE</p><h2>Upload jewellery report</h2><p>Select the store, then upload its Excel report. This replaces that store’s current list; new codes are added and missing codes are removed.</p>
+        <label className="field"><span>Store</span><select value={uploadStore} onChange={e => setUploadStore(e.target.value as StoreName)}>{STORES.map(s => <option key={s}>{s}</option>)}</select></label>
+        <button className="dropzone" onClick={() => fileRef.current?.click()}><Upload size={26}/><b>Choose Excel report</b><span>.xls or .xlsx</span></button>
+        <input ref={fileRef} hidden type="file" accept=".xls,.xlsx" onChange={e => handleUpload(e.target.files?.[0])}/>
+        <div className="importRules"><b>Version 1 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
+      </section></div>}
+
+      {showSettings && <div className="modalBackdrop"><section className="modal settingsModal">
+        <button className="modalClose" onClick={() => setShowSettings(false)}><X/></button><span className="modalIcon"><Settings2/></span><p className="eyebrow">CALCULATION SETTINGS</p><h2>Melt price scenario</h2>
+        <p>Enter NZD spot prices per gram to test what happens when metal prices change.</p>
+        <div className="twoCols">
+          <label className="field"><span>Gold spot price (NZD/g)</span><input type="number" step="0.01" value={prices.gold} onChange={e => setPrices(p => ({...p, gold: Number(e.target.value), source: "manual", updatedAt: todayIso()}))}/></label>
+          <label className="field"><span>Silver spot price (NZD/g)</span><input type="number" step="0.01" value={prices.silver} onChange={e => setPrices(p => ({...p, silver: Number(e.target.value), source: "manual", updatedAt: todayIso()}))}/></label>
+        </div>
+        <h3>Priority thresholds</h3><div className="threeCols">
+          <label className="field"><span>Red above</span><input type="number" value={thresholds.red * 100} onChange={e => setThresholds(t => ({...t, red: Number(e.target.value)/100}))}/><i>%</i></label>
+          <label className="field"><span>Orange from</span><input type="number" value={thresholds.orange * 100} onChange={e => setThresholds(t => ({...t, orange: Number(e.target.value)/100}))}/><i>%</i></label>
+          <label className="field"><span>Yellow from</span><input type="number" value={thresholds.yellow * 100} onChange={e => setThresholds(t => ({...t, yellow: Number(e.target.value)/100}))}/><i>%</i></label>
+        </div>
+        <div className="formula"><b>Gold:</b> ((97% × spot ÷ 24) × carat × weight) × 1.15<br/><b>Silver:</b> spot × 92.5% × 97% × weight × 1.15</div>
+        <div className="modalActions"><button className="secondary" onClick={resetDemo}>Reset demo</button><button className="secondary" onClick={() => setPrices(dailyPrices)}>Use daily prices</button><button className="primary" onClick={() => setShowSettings(false)}>Apply settings</button></div>
+      </section></div>}
+
+      {showReview && <div className="modalBackdrop"><section className="modal reviewModal">
+        <button className="modalClose" onClick={() => setShowReview(false)}><X/></button><span className="modalIcon warning"><AlertTriangle/></span><p className="eyebrow">MANUAL CHECKS</p><h2>Needs review</h2><p>These jewellery items were imported but cannot receive a reliable melt value yet.</p>
+        <div className="reviewList">{reviewItems.length ? reviewItems.map(i => <article key={`${i.store}-${i.stockCode}`}><div><b>{i.stockCode}</b><span>{i.description}</span><small>{i.store}</small></div><strong>{i.reviewReason}</strong></article>) : <div className="empty">No items need review.</div>}</div>
+      </section></div>}
+    </main>
+  );
+}
