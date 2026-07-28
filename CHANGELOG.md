@@ -1,5 +1,13 @@
 # Changelog
 
+## Version 3.0.0 — 29 July 2026
+
+- Fixed ticket prices showing as `$0` when the report stores the ticket at the start of the first description line.
+- Automatically repairs previously saved `$0` ticket values when the dashboard opens.
+- Removes the recovered price prefix from the displayed item description.
+- Replaced the top estimated net sale return card with total ticket price.
+- Total ticket price now follows the current search, metal and priority filters.
+
 ## Version 2.0.0 — 28 July 2026
 
 - Added a fixed 15% New Zealand GST deduction.

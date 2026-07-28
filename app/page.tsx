@@ -52,6 +52,19 @@ const parseDate = (value: unknown): string => {
   return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
 };
 const parseCurrency = (v: unknown) => Number(String(v ?? "0").replace(/[^0-9.-]/g, "")) || 0;
+const leadingTicket = (text: string) => {
+  const match = text.trim().match(/^\$?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{2}))?(?=\s|$)/);
+  if (!match) return null;
+  const value = Number(`${match[1].replace(/,/g, "")}.${match[2] ?? "00"}`);
+  return Number.isFinite(value) && value > 0
+    ? { value, description: text.slice(match[0].length).trim() }
+    : null;
+};
+const repairSavedTicket = (item: Item): Item => {
+  if (item.ticketPrice > 0) return item;
+  const recovered = leadingTicket(item.description);
+  return recovered ? { ...item, ticketPrice: recovered.value, description: recovered.description } : item;
+};
 const detectMetal = (text: string): Metal => {
   const t = text.toUpperCase();
   const k = t.match(/\b(9|10|14|18|22)\s*(?:CT|KT|K)\b/);
@@ -100,8 +113,11 @@ function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
         if (next[0]) descriptionParts.push(String(next[0]).trim());
         if (j - i > 5) break;
       }
-      const description = descriptionParts.join(" ").replace(/\s+/g, " ").trim();
+      let description = descriptionParts.join(" ").replace(/\s+/g, " ").trim();
       if (/\bWATCH(?:ES)?\b/i.test(description)) { i = Math.max(i, j - 1); continue; }
+      const recoveredTicket = leadingTicket(description);
+      const ticketPrice = parseCurrency(row[8]) || recoveredTicket?.value || 0;
+      if (recoveredTicket) description = recoveredTicket.description;
       const metal = detectMetal(description);
       const weight = detectWeight(description);
       const reasons: string[] = [];
@@ -109,7 +125,7 @@ function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
       if (metal === "Unknown") reasons.push("Metal type not recognised");
       if (!weight) reasons.push("Weight in GMS not found");
       out.push({
-        stockCode, description: description || "Description not found", ticketPrice: parseCurrency(row[8]),
+        stockCode, description: description || "Description not found", ticketPrice,
         originalShelfDate: parseDate(row[9]), currentShelfDate: parseDate(row[12]), metal, weight, store,
         reviewReason: reasons.join("; ") || undefined
       });
@@ -144,7 +160,7 @@ export default function Home() {
       const savedPrices = localStorage.getItem("ccv-jewellery-prices");
       const savedThresholds = localStorage.getItem("ccv-jewellery-thresholds");
       const savedSellingFee = localStorage.getItem("ccv-jewellery-selling-fee");
-      setItems(savedItems ? JSON.parse(savedItems) : SAMPLE_ITEMS);
+      setItems(savedItems ? (JSON.parse(savedItems) as Item[]).map(repairSavedTicket) : SAMPLE_ITEMS);
       if (savedPrices) { const p = JSON.parse(savedPrices); setPrices(p); setDailyPrices({ ...p, source: "daily" }); }
       if (savedThresholds) setThresholds(JSON.parse(savedThresholds));
       if (savedSellingFee !== null) setSellingFee(Number(savedSellingFee));
@@ -193,6 +209,10 @@ export default function Home() {
     if (sortKey === "stock") return a.stockCode.localeCompare(b.stockCode);
     return (bm / (netSaleReturn(b.ticketPrice, sellingFee) || 1)) - (am / (netSaleReturn(a.ticketPrice, sellingFee) || 1));
   }), [validItems, query, metalFilter, priorityFilter, sortKey, prices, thresholds, sellingFee]);
+  const filteredTicketTotal = useMemo(
+    () => rows.reduce((sum, item) => sum + item.ticketPrice, 0),
+    [rows]
+  );
 
   async function handleUpload(file?: File) {
     if (!file) return;
@@ -236,7 +256,7 @@ export default function Home() {
 
         <section className="metrics">
           <article><span className="metricIcon burgundy"><Gem size={21}/></span><div><small>ITEMS ON SALE</small><strong>{totals.count}</strong><p>{storeFilter}</p></div></article>
-          <article><span className="metricIcon gold"><CircleDollarSign size={21}/></span><div><small>EST. NET SALE RETURN</small><strong>{money(totals.net)}</strong><p>{money(totals.ticket)} ticket less GST + {Math.round(sellingFee * 100)}% fee</p></div></article>
+          <article><span className="metricIcon gold"><CircleDollarSign size={21}/></span><div><small>TOTAL TICKET PRICE</small><strong>{money(filteredTicketTotal)}</strong><p>{rows.length} items in current search</p></div></article>
           <article><span className="metricIcon dark"><RefreshCw size={21}/></span><div><small>EST. MELT VALUE</small><strong>{money(totals.melt)}</strong><p>{totals.ticket ? Math.round(totals.melt / totals.ticket * 100) : 0}% of ticket value</p></div></article>
           <article className="dangerCard"><span className="metricIcon red"><AlertTriangle size={21}/></span><div><small>MELT OPPORTUNITIES</small><strong>{totals.opportunities}</strong><p>Melt exceeds net sale return</p></div></article>
         </section>
