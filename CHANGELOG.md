@@ -34,3 +34,7 @@
 - Added editable priority thresholds.
 - Added stock search, filters, sorting and Needs Review workflow.
 - Added responsive desktop and mobile layouts.
+# Version 5
+
+- Added clear highest-to-lowest sorting for days on sale, ticket price, melt value and difference.
+- Kept melt risk percentage and stock-code sorting available.

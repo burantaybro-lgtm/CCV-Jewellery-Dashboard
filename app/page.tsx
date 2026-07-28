@@ -17,7 +17,7 @@ type Item = {
 };
 type Prices = { gold: number; silver: number; updatedAt: string; source: "daily" | "manual" };
 type Thresholds = { red: number; orange: number; yellow: number };
-type SortKey = "ratio" | "ticket" | "melt" | "days" | "stock";
+type SortKey = "ratio" | "ticket" | "melt" | "difference" | "days" | "stock";
 
 const STORES: StoreName[] = ["Palmerston North", "New Plymouth", "Wanganui"];
 const GST_RATE = 0.15;
@@ -217,6 +217,11 @@ export default function Home() {
     const am = meltValue(a, prices), bm = meltValue(b, prices);
     if (sortKey === "ticket") return b.ticketPrice - a.ticketPrice;
     if (sortKey === "melt") return bm - am;
+    if (sortKey === "difference") {
+      const aDifference = am - netSaleReturn(a.ticketPrice, sellingFee);
+      const bDifference = bm - netSaleReturn(b.ticketPrice, sellingFee);
+      return bDifference - aDifference;
+    }
     if (sortKey === "days") return daysOnSale(b.originalShelfDate) - daysOnSale(a.originalShelfDate);
     if (sortKey === "stock") return a.stockCode.localeCompare(b.stockCode);
     return (bm / (netSaleReturn(b.ticketPrice, sellingFee) || 1)) - (am / (netSaleReturn(a.ticketPrice, sellingFee) || 1));
@@ -288,7 +293,7 @@ export default function Home() {
             <label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search stock code or description…"/></label>
             <select value={metalFilter} onChange={e => setMetalFilter(e.target.value as typeof metalFilter)}><option>All metals</option>{metals.map(m => <option key={m.label}>{m.label}</option>)}</select>
             <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}><option>All priorities</option><option value="red">Red — melt exceeds net return</option><option value="orange">Orange — 75% to 100%</option><option value="yellow">Yellow — 50% to 75%</option><option value="green">Green — below 50%</option></select>
-            <label className="sort"><ArrowDownUp size={16}/><select value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}><option value="ratio">Melt risk %</option><option value="melt">Melt value</option><option value="ticket">Ticket price</option><option value="days">Days on sale</option><option value="stock">Stock code</option></select></label>
+            <label className="sort"><ArrowDownUp size={16}/><select aria-label="Sort jewellery items" value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}><option value="ratio">Melt risk % — highest to lowest</option><option value="days">On sale days — highest to lowest</option><option value="ticket">Ticket — highest to lowest</option><option value="melt">Melt value — highest to lowest</option><option value="difference">Difference — highest to lowest</option><option value="stock">Stock code — A to Z</option></select></label>
           </div>
           <div className="tableWrap"><table><thead><tr><th>Melt risk</th><th>Stock item</th><th>Store</th><th>Metal / weight</th><th>On sale</th><th>Ticket</th><th>Net sale return</th><th>Melt value</th><th>Difference</th></tr></thead>
             <tbody>{rows.map(item => {
