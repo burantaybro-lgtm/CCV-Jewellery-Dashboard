@@ -20,6 +20,8 @@ type Thresholds = { red: number; orange: number; yellow: number };
 type SortKey = "ratio" | "ticket" | "melt" | "days" | "stock";
 
 const STORES: StoreName[] = ["Palmerston North", "New Plymouth", "Wanganui"];
+const GST_RATE = 0.15;
+const DEFAULT_SELLING_FEE = 0.15;
 const SAMPLE_ITEMS: Item[] = [
   { stockCode: "DEMO-1001", description: "9CT YG CHAIN TW 12.40GMS", ticketPrice: 649, originalShelfDate: "2025-03-14", currentShelfDate: "2026-05-02", metal: "9ct", weight: 12.4, store: "Palmerston North" },
   { stockCode: "DEMO-1002", description: "18CT WG DIAMOND RING TW 4.20GMS", ticketPrice: 899, originalShelfDate: "2025-10-08", currentShelfDate: "2026-04-19", metal: "18ct", weight: 4.2, store: "Palmerston North" },
@@ -68,6 +70,8 @@ const meltValue = (item: Item, prices: Prices) => {
   const k = Number(item.metal.replace("ct", ""));
   return k ? (prices.gold * 0.97 / 24) * k * item.weight * 1.15 : 0;
 };
+const netSaleReturn = (ticketPrice: number, sellingFee: number) =>
+  Math.max(0, (ticketPrice / (1 + GST_RATE)) - (ticketPrice * sellingFee));
 const priority = (ratio: number, t: Thresholds) => ratio > t.red ? "red" : ratio >= t.orange ? "orange" : ratio >= t.yellow ? "yellow" : "green";
 
 function parseReport(buffer: ArrayBuffer, store: StoreName): Item[] {
@@ -132,15 +136,18 @@ export default function Home() {
   const [prices, setPrices] = useState<Prices>({ gold: 185, silver: 2.25, updatedAt: todayIso(), source: "daily" });
   const [dailyPrices, setDailyPrices] = useState<Prices>({ gold: 185, silver: 2.25, updatedAt: todayIso(), source: "daily" });
   const [thresholds, setThresholds] = useState<Thresholds>({ red: 1, orange: 0.75, yellow: 0.5 });
+  const [sellingFee, setSellingFee] = useState(DEFAULT_SELLING_FEE);
 
   useEffect(() => {
     try {
       const savedItems = localStorage.getItem("ccv-jewellery-items");
       const savedPrices = localStorage.getItem("ccv-jewellery-prices");
       const savedThresholds = localStorage.getItem("ccv-jewellery-thresholds");
+      const savedSellingFee = localStorage.getItem("ccv-jewellery-selling-fee");
       setItems(savedItems ? JSON.parse(savedItems) : SAMPLE_ITEMS);
       if (savedPrices) { const p = JSON.parse(savedPrices); setPrices(p); setDailyPrices({ ...p, source: "daily" }); }
       if (savedThresholds) setThresholds(JSON.parse(savedThresholds));
+      if (savedSellingFee !== null) setSellingFee(Number(savedSellingFee));
     } finally { setReady(true); }
   }, []);
   useEffect(() => {
@@ -157,6 +164,7 @@ export default function Home() {
   useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-items", JSON.stringify(items)); }, [items, ready]);
   useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-prices", JSON.stringify(prices)); }, [prices, ready]);
   useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-thresholds", JSON.stringify(thresholds)); }, [thresholds, ready]);
+  useEffect(() => { if (ready) localStorage.setItem("ccv-jewellery-selling-fee", String(sellingFee)); }, [sellingFee, ready]);
 
   const storeItems = useMemo(() => items.filter(i => storeFilter === "All stores" || i.store === storeFilter), [items, storeFilter]);
   const reviewItems = storeItems.filter(i => i.reviewReason);
@@ -164,15 +172,16 @@ export default function Home() {
   const totals = useMemo(() => ({
     count: storeItems.length,
     ticket: storeItems.reduce((s, i) => s + i.ticketPrice, 0),
+    net: storeItems.reduce((s, i) => s + netSaleReturn(i.ticketPrice, sellingFee), 0),
     melt: validItems.reduce((s, i) => s + meltValue(i, prices), 0),
-    opportunities: validItems.filter(i => meltValue(i, prices) > i.ticketPrice).length
-  }), [storeItems, validItems, prices]);
+    opportunities: validItems.filter(i => meltValue(i, prices) > netSaleReturn(i.ticketPrice, sellingFee)).length
+  }), [storeItems, validItems, prices, sellingFee]);
   const metals = useMemo(() => (["9ct", "10ct", "14ct", "18ct", "22ct", "Sterling Silver"] as Metal[]).map(m => ({
     label: m, count: validItems.filter(i => i.metal === m).length,
     weight: validItems.filter(i => i.metal === m).reduce((s, i) => s + (i.weight || 0), 0)
   })), [validItems]);
   const rows = useMemo(() => validItems.filter(i => {
-    const m = meltValue(i, prices); const r = i.ticketPrice ? m / i.ticketPrice : 0;
+    const m = meltValue(i, prices); const net = netSaleReturn(i.ticketPrice, sellingFee); const r = net ? m / net : 0;
     return (!query || `${i.stockCode} ${i.description}`.toLowerCase().includes(query.toLowerCase()))
       && (metalFilter === "All metals" || i.metal === metalFilter)
       && (priorityFilter === "All priorities" || priority(r, thresholds) === priorityFilter);
@@ -182,8 +191,8 @@ export default function Home() {
     if (sortKey === "melt") return bm - am;
     if (sortKey === "days") return daysOnSale(b.originalShelfDate) - daysOnSale(a.originalShelfDate);
     if (sortKey === "stock") return a.stockCode.localeCompare(b.stockCode);
-    return (bm / (b.ticketPrice || 1)) - (am / (a.ticketPrice || 1));
-  }), [validItems, query, metalFilter, priorityFilter, sortKey, prices, thresholds]);
+    return (bm / (netSaleReturn(b.ticketPrice, sellingFee) || 1)) - (am / (netSaleReturn(a.ticketPrice, sellingFee) || 1));
+  }), [validItems, query, metalFilter, priorityFilter, sortKey, prices, thresholds, sellingFee]);
 
   async function handleUpload(file?: File) {
     if (!file) return;
@@ -216,7 +225,7 @@ export default function Home() {
       <section className="workspace">
         {notice && <div className="notice">{notice}<button onClick={() => setNotice("")}><X size={16}/></button></div>}
         <div className="pageHead">
-          <div><p className="eyebrow">JEWELLERY PERFORMANCE</p><h1>What is worth more melted?</h1><p className="subhead">Compare ticket prices with estimated refinery values across all three stores.</p></div>
+          <div><p className="eyebrow">JEWELLERY PERFORMANCE</p><h1>What is worth more melted?</h1><p className="subhead">Compare refinery values with estimated net sale returns after GST and selling costs.</p></div>
           <label className="storeSelect"><Store size={18}/><select value={storeFilter} onChange={e => setStoreFilter(e.target.value as typeof storeFilter)}><option>All stores</option>{STORES.map(s => <option key={s}>{s}</option>)}</select><ChevronDown size={16}/></label>
         </div>
 
@@ -227,9 +236,9 @@ export default function Home() {
 
         <section className="metrics">
           <article><span className="metricIcon burgundy"><Gem size={21}/></span><div><small>ITEMS ON SALE</small><strong>{totals.count}</strong><p>{storeFilter}</p></div></article>
-          <article><span className="metricIcon gold"><CircleDollarSign size={21}/></span><div><small>TOTAL TICKET VALUE</small><strong>{money(totals.ticket)}</strong><p>Across selected stock</p></div></article>
+          <article><span className="metricIcon gold"><CircleDollarSign size={21}/></span><div><small>EST. NET SALE RETURN</small><strong>{money(totals.net)}</strong><p>{money(totals.ticket)} ticket less GST + {Math.round(sellingFee * 100)}% fee</p></div></article>
           <article><span className="metricIcon dark"><RefreshCw size={21}/></span><div><small>EST. MELT VALUE</small><strong>{money(totals.melt)}</strong><p>{totals.ticket ? Math.round(totals.melt / totals.ticket * 100) : 0}% of ticket value</p></div></article>
-          <article className="dangerCard"><span className="metricIcon red"><AlertTriangle size={21}/></span><div><small>MELT OPPORTUNITIES</small><strong>{totals.opportunities}</strong><p>Melt exceeds ticket</p></div></article>
+          <article className="dangerCard"><span className="metricIcon red"><AlertTriangle size={21}/></span><div><small>MELT OPPORTUNITIES</small><strong>{totals.opportunities}</strong><p>Melt exceeds net sale return</p></div></article>
         </section>
 
         <section className="caratGrid">
@@ -246,23 +255,23 @@ export default function Home() {
           <div className="filters">
             <label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search stock code or description…"/></label>
             <select value={metalFilter} onChange={e => setMetalFilter(e.target.value as typeof metalFilter)}><option>All metals</option>{metals.map(m => <option key={m.label}>{m.label}</option>)}</select>
-            <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}><option>All priorities</option><option value="red">Red — melt exceeds ticket</option><option value="orange">Orange — within 25%</option><option value="yellow">Yellow — within 50%</option><option value="green">Green — below 50%</option></select>
-            <label className="sort"><ArrowDownUp size={16}/><select value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}><option value="ratio">Melt %</option><option value="melt">Melt value</option><option value="ticket">Ticket price</option><option value="days">Days on sale</option><option value="stock">Stock code</option></select></label>
+            <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}><option>All priorities</option><option value="red">Red — melt exceeds net return</option><option value="orange">Orange — 75% to 100%</option><option value="yellow">Yellow — 50% to 75%</option><option value="green">Green — below 50%</option></select>
+            <label className="sort"><ArrowDownUp size={16}/><select value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}><option value="ratio">Melt risk %</option><option value="melt">Melt value</option><option value="ticket">Ticket price</option><option value="days">Days on sale</option><option value="stock">Stock code</option></select></label>
           </div>
-          <div className="tableWrap"><table><thead><tr><th>Priority</th><th>Stock item</th><th>Store</th><th>Metal / weight</th><th>On sale</th><th>Ticket</th><th>Melt value</th><th>Difference</th></tr></thead>
+          <div className="tableWrap"><table><thead><tr><th>Melt risk</th><th>Stock item</th><th>Store</th><th>Metal / weight</th><th>On sale</th><th>Ticket</th><th>Net sale return</th><th>Melt value</th><th>Difference</th></tr></thead>
             <tbody>{rows.map(item => {
-              const melt = meltValue(item, prices), difference = melt - item.ticketPrice, ratio = item.ticketPrice ? melt / item.ticketPrice : 0, level = priority(ratio, thresholds);
+              const melt = meltValue(item, prices), net = netSaleReturn(item.ticketPrice, sellingFee), difference = melt - net, ratio = net ? melt / net : 0, level = priority(ratio, thresholds);
               return <tr key={`${item.store}-${item.stockCode}`}>
                 <td><span className={`priority ${level}`}>{Math.round(ratio * 100)}%</span></td>
                 <td><b>{item.stockCode}</b><small>{item.description}</small></td><td>{item.store}</td>
                 <td><b>{item.metal}</b><small>{item.weight?.toFixed(2)} g</small></td>
                 <td><b>{daysOnSale(item.originalShelfDate)} days</b><small>Repriced {item.currentShelfDate || "—"}</small></td>
-                <td className="numeric">{money(item.ticketPrice)}</td><td className="numeric"><b>{money(melt)}</b></td>
-                <td className={`numeric diff ${difference > 0 ? "negative" : "positive"}`}><b>{difference > 0 ? "+" : "−"}{money(Math.abs(difference))}</b><small>{difference > 0 ? "melt advantage" : "ticket advantage"}</small></td>
+                <td className="numeric">{money(item.ticketPrice)}</td><td className="numeric"><b>{money(net)}</b><small>after GST + fee</small></td><td className="numeric"><b>{money(melt)}</b></td>
+                <td className={`numeric diff ${difference > 0 ? "negative" : "positive"}`}><b>{difference > 0 ? "+" : "−"}{money(Math.abs(difference))}</b><small>{difference > 0 ? "melt advantage" : "net sale advantage"}</small></td>
               </tr>;
             })}</tbody></table>{!rows.length && <div className="empty">No items match the selected filters.</div>}</div>
         </section>
-        <p className="dataNote">Version 1 stores uploaded stock in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
+        <p className="dataNote">Version 2 stores uploaded stock and settings in this browser. Use “Reset demo” in Settings to restore the example dashboard.</p>
       </section>
 
       {showUpload && <div className="modalBackdrop"><section className="modal">
@@ -271,7 +280,7 @@ export default function Home() {
         <label className="field"><span>Store</span><select value={uploadStore} onChange={e => setUploadStore(e.target.value as StoreName)}>{STORES.map(s => <option key={s}>{s}</option>)}</select></label>
         <button className="dropzone" onClick={() => fileRef.current?.click()}><Upload size={26}/><b>Choose Excel report</b><span>.xls or .xlsx</span></button>
         <input ref={fileRef} hidden type="file" accept=".xls,.xlsx" onChange={e => handleUpload(e.target.files?.[0])}/>
-        <div className="importRules"><b>Version 1 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
+        <div className="importRules"><b>Version 2 import rules</b><span>✓ Reads “NOT FOUND DURING STOCKTAKE, ON SALE ACCORDING TO SYSTEM”</span><span>✓ Ignores watches completely</span><span>✓ Flags missing carat, weight and platinum</span></div>
       </section></div>}
 
       {showSettings && <div className="modalBackdrop"><section className="modal settingsModal">
@@ -281,13 +290,18 @@ export default function Home() {
           <label className="field"><span>Gold spot price (NZD/g)</span><input type="number" step="0.01" value={prices.gold} onChange={e => setPrices(p => ({...p, gold: Number(e.target.value), source: "manual", updatedAt: todayIso()}))}/></label>
           <label className="field"><span>Silver spot price (NZD/g)</span><input type="number" step="0.01" value={prices.silver} onChange={e => setPrices(p => ({...p, silver: Number(e.target.value), source: "manual", updatedAt: todayIso()}))}/></label>
         </div>
+        <h3>Sale deductions</h3>
+        <div className="twoCols">
+          <label className="field"><span>GST (fixed)</span><input type="number" value={GST_RATE * 100} disabled/><i>%</i></label>
+          <label className="field"><span>Selling fee (editable)</span><input type="number" min="0" max="100" step="0.1" value={sellingFee * 100} onChange={e => setSellingFee(Math.max(0, Number(e.target.value)) / 100)}/><i>%</i></label>
+        </div>
         <h3>Priority thresholds</h3><div className="threeCols">
           <label className="field"><span>Red above</span><input type="number" value={thresholds.red * 100} onChange={e => setThresholds(t => ({...t, red: Number(e.target.value)/100}))}/><i>%</i></label>
           <label className="field"><span>Orange from</span><input type="number" value={thresholds.orange * 100} onChange={e => setThresholds(t => ({...t, orange: Number(e.target.value)/100}))}/><i>%</i></label>
           <label className="field"><span>Yellow from</span><input type="number" value={thresholds.yellow * 100} onChange={e => setThresholds(t => ({...t, yellow: Number(e.target.value)/100}))}/><i>%</i></label>
         </div>
-        <div className="formula"><b>Gold:</b> ((97% × spot ÷ 24) × carat × weight) × 1.15<br/><b>Silver:</b> spot × 92.5% × 97% × weight × 1.15</div>
-        <div className="modalActions"><button className="secondary" onClick={resetDemo}>Reset demo</button><button className="secondary" onClick={() => setPrices(dailyPrices)}>Use daily prices</button><button className="primary" onClick={() => setShowSettings(false)}>Apply settings</button></div>
+        <div className="formula"><b>Net sale return:</b> (ticket ÷ 1.15) − (ticket × selling fee)<br/><b>Melt risk:</b> melt value ÷ net sale return × 100<br/><b>Gold:</b> ((97% × spot ÷ 24) × carat × weight) × 1.15<br/><b>Silver:</b> spot × 92.5% × 97% × weight × 1.15</div>
+        <div className="modalActions"><button className="secondary" onClick={() => { resetDemo(); setSellingFee(DEFAULT_SELLING_FEE); }}>Reset demo</button><button className="secondary" onClick={() => setPrices(dailyPrices)}>Use daily prices</button><button className="primary" onClick={() => setShowSettings(false)}>Apply settings</button></div>
       </section></div>}
 
       {showReview && <div className="modalBackdrop"><section className="modal reviewModal">
